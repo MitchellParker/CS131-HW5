@@ -45,20 +45,17 @@
         'λ
         'lambda)
       (let ((formals (process-formals (cadr x) (cadr y))))
-        (cons
-          formals
-          ; loop through the processed formals to put them into bound-vars
-          (let bind-vars ((formals formals) (xf (cadr x)) (yf (cadr y)) (bound bound-vars))
-            (if (null? formals)
-              (subexprs-compare (cddr x) (cddr y) bound) ; exit loop here
-              (bind-vars (cdr formals) (cdr xf) (cdr yf)
-                (cons (list (car formals) (car xf) (car yf)) bound)))
-          )
-        )
-      )
+        (cons formals
+        ; loop through the processed formals to put them into bound-vars
+        (let bind-vars ((formals formals) (xf (cadr x)) (yf (cadr y)) (bound bound-vars))
+          (if (null? formals)
+            (subexprs-compare (cddr x) (cddr y) bound) ; exit loop here
+            (bind-vars (cdr formals) (cdr xf) (cdr yf)
+              (cons (list (car formals) (car xf) (car yf)) bound)))))))))
 
-    )))
-
+; helper to lmda-compare which combines the lists of formals xf and yf
+; when they agree, keeps the same identifier
+; when x has X and y has Y, instead uses X!Y
 (define (process-formals xf yf)
   (if (null? xf)
     '()
@@ -68,6 +65,9 @@
         (string->symbol (string-append (symbol->string (car xf)) "!" (symbol->string (car yf)))))
       (process-formals (cdr xf) (cdr yf)))))
 
+; helper to expr-compare specifically for handling special forms
+; returns #f if neither are special
+; otherwise, returns the proper expression for comparing x and y
 (define (special-compare x y bound-vars)
   ; bound values for car x and car y, if any
   (let ((bx (lookup (car x) cadr car bound-vars))
@@ -84,7 +84,7 @@
       (different-expr x y) ; quotes don't get expanded
     ; else, only one is special, or they don't match
       (different-expr x y))))
-    #f))))
+    #f)))) ; neither are special
 
 ; finds the right symbols to use for x and y
 ; e.g. if x=c, f=cadr, r=car bv=((a!b a b) (c!d c d))
@@ -98,7 +98,7 @@
           (find (cdr list))))))
 
 ; compares two expressions x and y, and returns an expression where
-; common subexpressions have been unified and
+; common subexpressions are unchanged and
 ; differing subexpressions have the property that:
 ; when % is bound to #t, behaves like x
 ; when % is bound to #f, behaves like y
@@ -109,3 +109,62 @@
         sf ; special form spotted, do special thing
         (subexprs-compare x y bound-vars))) ; compare recursively as usual
     (compare x y bound-vars))) ; compare without expanding
+
+; like eqv? except it recurses through multi-level lists
+(define (deep-eqv? a b)
+  (if (and (pair? a) (pair? b))
+    (and (deep-eqv? (car a) (car b)) (deep-eqv? (cdr a) (cdr b)))
+    (eqv? a b)))
+
+; finds the expression from doing (expr-compare x y)
+; tests if evaluating that expression in a context
+; where % is #t or #f is same as (eval x) or (eval y) respectively
+(define (test-expr-compare x y)
+  (let ((cmp (expr-compare x y)))
+    (and
+      (deep-eqv? (eval x) (eval `(let ((% #t)) ,cmp)))
+      (deep-eqv? (eval y) (eval `(let ((% #f)) ,cmp))))))
+
+(define test-expr-x
+  '(list
+    #t
+    #t
+    #f
+    #f
+    (list 1 2 3)
+    (list 1 2 3)
+    ((lambda (a b) (a b)) list 'b)
+    ((lambda (a b) (a b)) list 'b)
+    ((λ (a b) (a b)) list 'b)
+    ((λ (a b) (a b)) list 'b)
+    ((lambda (a b) (a b)) list 'b)
+    ((lambda (a b) (a b)) list 'b)
+    ((lambda (if a b c) (if a b c)) + 1 2 3)
+    (if (eqv? 1 2) #t #f)
+    (if (eqv? 1 2) #t #f)
+    (if (eqv? 1 2) #t #f)
+    '(a b)
+    '(a b)
+    (quote (a b))))
+
+(define test-expr-y
+  '(list
+    #t ; no change
+    #f ; #t->#f
+    #t ; #f->#t
+    #f ; no change
+    (list 1 2 3) ; no change
+    (list 3 2 1) ; 1->3 and 3->1
+    ((lambda (a b) (a b)) list 'b) ; no change
+    ((λ (a b) (a b)) list 'b) ; lambda->λ
+    ((lambda (a b) (a b)) list 'b) ; λ->lambda
+    ((λ (a b) (a b)) list 'b) ; no change
+    ((lambda (a c) (a c)) list 'c) ; b->c
+    ((lambda (b a) (a b)) 'b list) ; a->b and b->a
+    ((lambda (quote a b c) (quote a b c)) + 1 2 3) ; if->quote
+    (if (eqv? 1 2) #t #f) ; no change
+    (list (eqv? 1 2) #t #f) ; if->list
+    (if (= 1 1) #t #f) ; eqv?->= and 2->1
+    '(a c) ; b->c
+    '(a b) ; no change, but inside of quotes shouldn't be looked at
+    (quote (a c)))) ; b->c
