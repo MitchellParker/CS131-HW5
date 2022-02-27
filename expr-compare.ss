@@ -35,6 +35,39 @@
       (expr-compare (car x) (car y) bound-vars)
       (subexprs-compare (cdr x) (cdr y) bound-vars))))
 
+; helper to special-compare, handles lambda expressions
+; x and y must both be lambda expressions
+(define (lmda-compare x y bound-vars)
+  (if (not (eqv? (length (cadr x)) (length (cadr y))))
+    (different-expr x y) ; different number of formals, comparison not possible
+    (cons
+      (if (or (eqv? (car x) 'λ) (eqv? (car y) 'λ))
+        'λ
+        'lambda)
+      (let ((formals (process-formals (cadr x) (cadr y))))
+        (cons
+          formals
+          ; loop through the processed formals to put them into bound-vars
+          (let bind-vars ((formals formals) (xf (cadr x)) (yf (cadr y)) (bound bound-vars))
+            (if (null? formals)
+              (subexprs-compare (cddr x) (cddr y) bound) ; exit loop here
+              (bind-vars (cdr formals) (cdr xf) (cdr yf)
+                (cons (list (car formals) (car xf) (car yf)) bound)))
+          )
+        )
+      )
+
+    )))
+
+(define (process-formals xf yf)
+  (if (null? xf)
+    '()
+    (cons
+      (if (eqv? (car xf) (car yf))
+        (car xf)
+        (string->symbol (string-append (symbol->string (car xf)) "!" (symbol->string (car yf)))))
+      (process-formals (cdr xf) (cdr yf)))))
+
 (define (special-compare x y bound-vars)
   ; bound values for car x and car y, if any
   (let ((bx (lookup (car x) cadr car bound-vars))
@@ -43,14 +76,14 @@
   (let ((sx (and (not bx) (memv (car x) '(if lambda λ quote))))
       (sy (and (not by) (memv (car y) '(if lambda λ quote)))))
   (if (or sx sy)
-    (if (and sx sy (eqv? (car x) (car y)))
-      (if (memv (car x) '(lambda λ))
-        (different-expr x y bound-vars) ; TODO handle lambdas
-      (if (eqv? (car x) 'if)
-        (subexprs-compare x y bound-vars)
-      ; else must be quote
-        (different-expr x y)))
-      (different-expr x y)) ; only one is special, or they don't match
+    (if (and (memv (car x) '(lambda λ)) (memv (car y) '(lambda λ)))
+      (lmda-compare x y bound-vars) ; lambdas need special treatment
+    (if (and (eqv? (car x) 'if) (eqv? (car y) 'if))
+      (subexprs-compare x y bound-vars) ; ifs can be compared element-wise
+    (if (and (eqv? (car x) 'quote) (eqv? (car y) 'quote))
+      (different-expr x y) ; quotes don't get expanded
+    ; else, only one is special, or they don't match
+      (different-expr x y))))
     #f))))
 
 ; finds the right symbols to use for x and y
@@ -74,5 +107,5 @@
     (let ((sf (special-compare x y bound-vars)))
       (if sf 
         sf ; special form spotted, do special thing
-        (subexprs-compare x y bound-vars))) ; expand recursively as usual
+        (subexprs-compare x y bound-vars))) ; compare recursively as usual
     (compare x y bound-vars))) ; compare without expanding
